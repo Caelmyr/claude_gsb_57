@@ -11,6 +11,11 @@
 
   <div class="container" style="max-width:960px">
     <div id="problemBody"></div>
+
+    <div class="card" id="solutionCard" style="display:none">
+      <div class="card-title">📖 官方题解 <span id="solPublishBtn"></span></div>
+      <div id="solutionList"></div>
+    </div>
   </div>
 
   <script src="/assets/app.js"></script>
@@ -86,7 +91,96 @@
         box.innerHTML = `<div class="empty">${OJ.esc(e.message)}</div>`;
       }
     }
+    /* ---------- 官方题解 ---------- */
+    let solCache = {};
+
+    // 管理员或授权用户（judge 角色）可发布/管理题解
+    function canManageSolutions() {
+      const u = OJ.currentUser();
+      return u && (u.role === "admin" || u.role === "judge");
+    }
+
+    function canEditSolution(s) {
+      const u = OJ.currentUser();
+      return u && (u.role === "admin" || (u.role === "judge" && s.author === u.id));
+    }
+
+    async function loadSolutions() {
+      if (!pid) return;
+      const card = OJ.el("solutionCard");
+      const box = OJ.el("solutionList");
+      card.style.display = "";
+      OJ.el("solPublishBtn").innerHTML = canManageSolutions()
+        ? `<button class="btn btn-primary btn-sm" onclick="openSolutionEditor()">＋ 发布题解</button>` : "";
+      try {
+        const data = await OJ.api("/problems/" + pid + "/solutions");
+        if (data.hidden) {
+          box.innerHTML = `<div class="empty">🔒 该题已加入未结束的竞赛「${OJ.esc(data.contest_title || "")}」，题解将在比赛结束（${OJ.fmtTime(data.contest_end_time)}）后公开。</div>`;
+          return;
+        }
+        solCache = {};
+        (data.items || []).forEach(s => { solCache[s.id] = s; });
+        if (!data.items.length) { box.innerHTML = `<div class="empty">暂无题解</div>`; return; }
+        box.innerHTML = data.items.map(s => `
+          <div class="thread">
+            <div>
+              <a class="t-title" style="cursor:pointer" onclick="viewSolution('${OJ.esc(s.id)}')">📖 ${OJ.esc(s.title)}</a>
+              ${canEditSolution(s) ? `
+                <button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="openSolutionEditor('${OJ.esc(s.id)}')">编辑</button>
+                <button class="btn btn-danger btn-sm" onclick="delSolution('${OJ.esc(s.id)}')">删除</button>` : ""}
+            </div>
+            <div class="t-meta">${OJ.esc(s.author_name)} · ${OJ.fmtTime(s.created_at)}${s.updated_at && s.updated_at !== s.created_at ? " · 更新于 " + OJ.fmtTime(s.updated_at) : ""}</div>
+          </div>`).join("");
+      } catch (e) { box.innerHTML = `<div class="empty">${OJ.esc(e.message)}</div>`; }
+    }
+
+    function viewSolution(id) {
+      const s = solCache[id];
+      if (!s) return;
+      const mask = OJ.openModal(s.title, `
+        <div class="muted" style="font-size:12px;margin-bottom:12px">${OJ.esc(s.author_name)} · ${OJ.fmtTime(s.created_at)}</div>
+        ${renderMarkdownish(s.content)}`);
+      mask.querySelector(".modal").style.maxWidth = "760px";
+    }
+
+    function openSolutionEditor(id) {
+      const s = id ? solCache[id] : null;
+      const body = `
+        <div class="form-group"><label>标题</label><input id="sol_title" value="${s ? OJ.esc(s.title) : ""}"></div>
+        <div class="form-group"><label>内容（空行分段）</label><textarea id="sol_content" rows="10">${s ? OJ.esc(s.content) : ""}</textarea></div>`;
+      const mask = OJ.openModal(s ? "编辑题解" : "发布题解", body);
+      mask.querySelector(".modal").style.maxWidth = "720px";
+      mask.querySelector(".modal-actions").innerHTML = `
+        <button class="btn btn-outline" onclick="this.closest('.modal-mask').remove()">取消</button>
+        <button class="btn btn-primary" onclick="saveSolution('${s ? OJ.esc(s.id) : ""}')">${s ? "保存" : "发布"}</button>`;
+    }
+
+    async function saveSolution(id) {
+      const body = {
+        title: document.getElementById("sol_title").value.trim(),
+        content: document.getElementById("sol_content").value.trim(),
+      };
+      if (!body.title || !body.content) { OJ.toast("标题和内容不能为空", "error"); return; }
+      try {
+        if (id) await OJ.api("/problems/" + pid + "/solutions/" + id, { method: "PUT", body });
+        else await OJ.api("/problems/" + pid + "/solutions", { method: "POST", body });
+        OJ.toast(id ? "已保存" : "发布成功", "success");
+        document.querySelector(".modal-mask").remove();
+        loadSolutions();
+      } catch (e) { OJ.toast(e.message, "error"); }
+    }
+
+    async function delSolution(id) {
+      if (!await OJ.confirmDialog("确定删除该题解？")) return;
+      try {
+        await OJ.api("/problems/" + pid + "/solutions/" + id, { method: "DELETE" });
+        OJ.toast("已删除", "success");
+        loadSolutions();
+      } catch (e) { OJ.toast(e.message, "error"); }
+    }
+
     load();
+    loadSolutions();
   </script>
 </body>
 </html>

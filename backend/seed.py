@@ -259,3 +259,20 @@ main()
         "created_at": now_iso(),
     }
     atomic_write_json(os.path.join(config.CONTESTS_DIR, "c1.json"), contest)
+
+    # 5) 官方题解示例（比赛期间对普通用户隐藏，赛后自动公开）
+    atomic_write_json(os.path.join(config.SOLUTIONS_DIR, "p1001.json"), {
+        "problem_id": "p1001",
+        "solutions": [{
+            "id": gen_id("s"),
+            "problem_id": "p1001",
+            "title": "A+B 问题官方题解",
+            "content": "直接读入两个整数并输出它们的和即可。\n\n"
+                       "注意 A、B 的绝对值可达 1e9：Python 无需特殊处理；"
+                       "C/C++ 请使用 long long 避免 int 溢出。",
+            "author": "admin",
+            "author_name": "管理员",
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        }],
+    })
