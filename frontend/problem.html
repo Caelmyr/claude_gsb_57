@@ -26,6 +26,11 @@
       return paras;
     }
 
+    function canEditSolution() {
+      const u = OJ.currentUser();
+      return u && (u.role === "admin" || u.role === "judge");
+    }
+
     async function load() {
       if (!pid) { OJ.el("problemBody").innerHTML = '<div class="empty">缺少题目参数</div>'; return; }
       const box = OJ.el("problemBody");
@@ -48,7 +53,10 @@
                 时间限制 <b>${p.time_limit_ms} ms</b> · 内存限制 <b>${Math.round(p.memory_limit_kb / 1024)} MB</b> · 分值 <b>${p.points}</b>
               </div>
             </div>
-            <button class="btn btn-primary btn-lg" onclick="location.href='/editor.html?id=${OJ.esc(p.id)}'">✏️ 提交代码</button>
+            <div class="flex gap-8">
+              <a class="btn btn-outline btn-lg" href="#solutionCard">📖 标准题解</a>
+              <button class="btn btn-primary btn-lg" onclick="location.href='/editor.html?id=${OJ.esc(p.id)}'">✏️ 提交代码</button>
+            </div>
           </div>
 
           <div class="card">
@@ -78,14 +86,137 @@
             <div>${(p.tags || []).map(t => `<span class="tag">${OJ.esc(t)}</span>`).join("")}</div>
           </div>
 
+          <div class="card" id="solutionCard">
+            <div class="card-title">
+              📖 标准题解
+              <span class="hint" id="solHint"></span>
+            </div>
+            <div id="solutionBox"><div class="muted">加载中…</div></div>
+          </div>
+
           <div class="flex gap-8 wrap">
             <button class="btn btn-outline" onclick="history.back()">← 返回列表</button>
             <a class="btn btn-outline" href="/forum.html?problem_id=${OJ.esc(p.id)}">💬 讨论该题</a>
           </div>`;
+        loadSolution();
       } catch (e) {
         box.innerHTML = `<div class="empty">${OJ.esc(e.message)}</div>`;
       }
     }
+
+    async function loadSolution() {
+      const box = OJ.el("solutionBox");
+      const hint = OJ.el("solHint");
+      let sol = null;
+      try {
+        sol = await OJ.api("/problems/" + pid + "/solution");
+      } catch (e) {
+        box.innerHTML = `<div class="empty">题解加载失败：${OJ.esc(e.message)}</div>`;
+        return;
+      }
+
+      // 比赛期间：普通用户只看到锁定提示
+      if (sol.hidden && !sol.preview) {
+        const names = (sol.contest_titles || []).map(t => `《${OJ.esc(t)}》`).join("、");
+        hint.innerHTML = '<span class="badge TLE">比赛中锁定</span>';
+        box.innerHTML = `
+          <div class="empty">
+            <div style="font-size:28px">🔒</div>
+            <div>该题正处于比赛${names ? " " + names : ""}中，题解暂不公开。</div>
+            <div class="muted" style="margin-top:8px">比赛结束（${OJ.esc(OJ.fmtTime(sol.unlock_at))}）后自动公开。</div>
+          </div>`;
+        return;
+      }
+
+      // 管理员/授权用户在比赛期间的预览横幅
+      const previewBanner = sol.preview
+        ? `<div class="muted" style="background:#fff7e6;border:1px solid #ffd591;color:#ad6800;padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:13px">
+             ⚠️ 预览模式：比赛结束（${OJ.esc(OJ.fmtTime(sol.unlock_at))}）后才会对普通用户公开。
+           </div>` : "";
+      hint.innerHTML = sol.preview ? '<span class="badge TLE">对普通用户隐藏中</span>' : "";
+
+      if (!sol.exists) {
+        box.innerHTML = `
+          ${previewBanner}
+          <div class="empty">
+            <div>暂无标准题解</div>
+            ${canEditSolution() ? '<button class="btn btn-primary mt-16" onclick="openEditor()">＋ 发布题解</button>' : ""}
+          </div>`;
+        return;
+      }
+
+      const langName = sol.language ? ((window.LANG_NAMES || {})[sol.language] || sol.language) : "";
+      box.innerHTML = `
+        ${previewBanner}
+        <div class="flex" style="justify-content:space-between;align-items:flex-start;gap:8px">
+          <div>
+            <h3 style="margin:0 0 6px">${OJ.esc(sol.title)}</h3>
+            <div class="muted" style="font-size:12px">
+              ${OJ.esc(sol.author_name)} · 发布于 ${OJ.esc(OJ.fmtTime(sol.created_at))}
+              ${sol.updated_at && sol.updated_at !== sol.created_at ? ` · 更新于 ${OJ.esc(OJ.fmtTime(sol.updated_at))}` : ""}
+              ${langName ? ` · <span class="tag">${OJ.esc(langName)}</span>` : ""}
+            </div>
+          </div>
+          ${canEditSolution() ? `
+          <div class="flex gap-8" style="flex-shrink:0">
+            <button class="btn btn-outline btn-sm" onclick='openEditor(${JSON.stringify({
+              title: sol.title, content: sol.content, code: sol.code, language: sol.language || ""
+            })})'>编辑</button>
+            <button class="btn btn-danger btn-sm" onclick="removeSolution()">删除</button>
+          </div>` : ""}
+        </div>
+        <div style="margin-top:12px">${renderMarkdownish(sol.content)}</div>
+        ${sol.code ? `<div class="form-group mt-16"><label>参考代码${langName ? "（" + OJ.esc(langName) + "）" : ""}</label>
+          <pre class="code light">${OJ.esc(sol.code)}</pre></div>` : ""}`;
+    }
+
+    function openEditor(existing) {
+      if (!canEditSolution()) { OJ.toast("无权发布题解", "error"); return; }
+      existing = existing || { title: "", content: "", code: "", language: "python" };
+      const langs = [
+        ["python", "Python 3"], ["cpp", "C++17"], ["c", "C11"], ["java", "Java 17"], ["", "不附代码"],
+      ].map(([v, n]) => `<option value="${v}" ${existing.language === v ? "selected" : ""}>${n}</option>`).join("");
+      const body = `
+        <div class="form-group"><label>标题</label><input id="s_title" value="${OJ.esc(existing.title)}" placeholder="例如：思路与复杂度分析"></div>
+        <div class="form-group"><label>题解正文</label><textarea id="s_content" rows="10" placeholder="解题思路、算法步骤、正确性证明、复杂度分析……">${OJ.esc(existing.content)}</textarea></div>
+        <div class="form-group"><label>参考代码语言</label><select id="s_language">${langs}</select></div>
+        <div class="form-group"><label>参考代码（可选）</label><textarea id="s_code" rows="10" class="mono" placeholder="粘贴标准实现代码…">${OJ.esc(existing.code || "")}</textarea></div>`;
+      const mask = OJ.openModal(existing.title ? "编辑题解" : "发布题解", body);
+      mask.querySelector(".modal").style.maxWidth = "760px";
+      mask.querySelector(".modal-actions").innerHTML = `
+        <button class="btn btn-outline" onclick="this.closest('.modal-mask').remove()">取消</button>
+        <button class="btn btn-primary" onclick="saveSolution()">保存</button>`;
+    }
+
+    async function saveSolution() {
+      const payload = {
+        title: OJ.el("s_title").value.trim(),
+        content: OJ.el("s_content").value,
+        language: OJ.el("s_language").value,
+        code: OJ.el("s_code").value,
+      };
+      if (!payload.title) { OJ.toast("题解标题不能为空", "error"); return; }
+      if (!payload.content.trim() && !(payload.code || "").trim()) {
+        OJ.toast("题解内容不能为空", "error"); return;
+      }
+      try {
+        await OJ.api("/problems/" + pid + "/solution", { method: "PUT", body: payload });
+        OJ.toast("题解已保存", "success");
+        document.querySelector(".modal-mask").remove();
+        loadSolution();
+      } catch (e) { OJ.toast(e.message, "error"); }
+    }
+
+    async function removeSolution() {
+      if (!await OJ.confirmDialog("确定删除该题解？删除后普通用户将无法查看。")) return;
+      try {
+        await OJ.api("/problems/" + pid + "/solution", { method: "DELETE" });
+        OJ.toast("题解已删除", "success");
+        loadSolution();
+      } catch (e) { OJ.toast(e.message, "error"); }
+    }
+
+    window.LANG_NAMES = { python: "Python 3", cpp: "C++17", c: "C11", java: "Java 17" };
     load();
   </script>
 </body>

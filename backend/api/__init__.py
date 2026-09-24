@@ -82,6 +82,20 @@ def require_admin(fn):
     return wrapper
 
 
+def require_solution_editor(fn):
+    """要求题解发布权限：管理员或被授权的题解/裁判用户（role=judge）。"""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        user = get_current_user()
+        if user is None:
+            return err("未登录或登录已过期", 401, 401)
+        if user.get("role") not in ("admin", "judge"):
+            return err("只有管理员或授权用户可以发布题解", 403, 403)
+        request.user = user
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 # ---- 蓝图注册 ----
 from backend.api.auth import auth_bp            # noqa: E402
 from backend.api.problems import problems_bp    # noqa: E402
@@ -89,12 +103,13 @@ from backend.api.contests import contests_bp    # noqa: E402
 from backend.api.submissions import submissions_bp  # noqa: E402
 from backend.api.leaderboard import leaderboard_bp  # noqa: E402
 from backend.api.forum import forum_bp          # noqa: E402
+from backend.api.solutions import solutions_bp  # noqa: E402
 from backend.api.stats import stats_bp          # noqa: E402
 from backend.api.settings import settings_bp    # noqa: E402
 
 ALL_BLUEPRINTS = [
     auth_bp, problems_bp, contests_bp, submissions_bp,
-    leaderboard_bp, forum_bp, stats_bp, settings_bp,
+    leaderboard_bp, forum_bp, solutions_bp, stats_bp, settings_bp,
 ]
 
 
